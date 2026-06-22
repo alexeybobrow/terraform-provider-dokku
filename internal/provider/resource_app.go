@@ -20,6 +20,10 @@ var appNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]*$`)
 // likewise excludes shell metacharacters.
 var domainRegex = regexp.MustCompile(`^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
+// portRegex enforces the scheme:hostPort:containerPort mapping format and, as a
+// side effect, excludes shell metacharacters.
+var portRegex = regexp.MustCompile(`^[a-zA-Z]+:[0-9]+:[0-9]+$`)
+
 func resourceApp() *schema.Resource {
 	return &schema.Resource{
 		Description: "Manages a Dokku application. This resource enables the configuration and deployment of applications on a Dokku host, supporting environment variables, domains, buildpacks, and port mapping.",
@@ -37,12 +41,11 @@ func resourceApp() *schema.Resource {
 				),
 				Description: "The name of the Dokku application.",
 			},
-			// TODO: locked support
 			"locked": &schema.Schema{
 				Type:     schema.TypeBool,
 				Default:  false,
 				Optional: true,
-				Description: "(Not yet implemented) Whether the application is locked for deployment. When true, deploys to this application will be blocked.",
+				Description: "Whether the application is locked for deployment. When true, a deploy lock is placed on the app (dokku apps:lock) and deploys are blocked until it is unlocked.",
 			},
 			"config_vars": &schema.Schema{
 				Type: schema.TypeMap,
@@ -78,20 +81,13 @@ func resourceApp() *schema.Resource {
 				Type: schema.TypeSet,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
+					ValidateFunc: validation.StringMatch(
+						portRegex,
+						"port mapping must be in the format scheme:hostPort:containerPort, e.g. https:443:8080",
+					),
 				},
 				Optional: true,
 				Description: "Set of port mappings for the application. Each mapping should be in the format 'scheme:hostPort:containerPort' (e.g., 'https:443:8080').",
-				// ValidateFunc: func(val interface{}, key string) (warns []string, errs []error) {
-				// 	v := val.([]string)
-
-				// 	for _, port := range v {
-				// 		isValidPort, _ := regexp.MatchString(`[A-z]+:[0-9]+:[0-9]+`, port)
-				// 		if !isValidPort {
-				// 			errs = append(errs, fmt.Errorf("Invalid port, expected format scheme:hostPort:containerPort e.g https:443:8080"))
-				// 		}
-				// 	}
-				// 	return []string{}, errs
-				// },
 			},
 			"nginx_bind_address_ipv4": {
 				Type:         schema.TypeString,

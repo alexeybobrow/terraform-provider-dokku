@@ -157,7 +157,12 @@ func dokkuAppRetrieve(appName string, client *goph.Client) (*DokkuApp, error) {
 		}
 	}
 
-	app.ConfigVars = readAppConfig(appName, client)
+	configVars, err := readAppConfig(appName, client)
+	if err != nil {
+		return nil, err
+	}
+	app.ConfigVars = configVars
+
 	domains, err := readAppDomains(appName, client)
 	if err != nil {
 		return nil, err
@@ -189,21 +194,53 @@ func dokkuAppRetrieve(appName string, client *goph.Client) (*DokkuApp, error) {
 	app.NginxBindAddressIpv4 = nginxReport.BindAddressIpv4
 	app.NginxBindAddressIpv6 = nginxReport.BindAddressIpv6
 
+	locked, err := readAppLocked(appName, client)
+	if err != nil {
+		return nil, err
+	}
+	app.Locked = locked
+
 	return app, nil
 }
 
-// TODO error handling
-func readAppConfig(appName string, sshClient *goph.Client) map[string]string {
+// readAppLocked reports whether the app currently has a deploy lock. The
+// `apps:locked` command exits non-zero when no lock is in place.
+func readAppLocked(appName string, client *goph.Client) (bool, error) {
+	res := run(client, fmt.Sprintf("apps:locked %s", shellescape.Quote(appName)))
+
+	if res.err != nil {
+		if res.status > 0 {
+			// Non-zero status simply means the app is not locked.
+			return false, nil
+		}
+		return false, res.err
+	}
+
+	return true, nil
+}
+
+// dokkuAppSetLocked locks or unlocks an app for deployment to match the desired
+// state.
+func dokkuAppSetLocked(appName string, locked bool, client *goph.Client) error {
+	cmd := "apps:unlock"
+	if locked {
+		cmd = "apps:lock"
+	}
+
+	res := run(client, fmt.Sprintf("%s %s", cmd, shellescape.Quote(appName)))
+	return res.err
+}
+
+func readAppConfig(appName string, sshClient *goph.Client) (map[string]string, error) {
 	res := run(sshClient, fmt.Sprintf("config:show %s", shellescape.Quote(appName)))
 
-	// if err {
-	// 	// TODO
-	// }
+	if res.err != nil {
+		return nil, res.err
+	}
 
 	configLines := strings.Split(res.stdout, "\n")
 
-	// TODO validate first line of output
-
+	// The first line is a header ("=====> <app> config vars"), skip it.
 	keyPairs := configLines[1:]
 
 	config := make(map[string]string)
@@ -224,7 +261,7 @@ func readAppConfig(appName string, sshClient *goph.Client) map[string]string {
 		}
 	}
 
-	return config
+	return config, nil
 }
 
 //
@@ -397,6 +434,16 @@ func dokkuAppCreate(app *DokkuApp, client *goph.Client) error {
 
 	err = dokkuAppNginxOptSet(app.Name, "bind-address-ipv6", app.NginxBindAddressIpv6, client)
 
+	if err != nil {
+		return err
+	}
+
+	// Newly created apps are unlocked by default, so only act when a lock is
+	// requested. Lock last, once all other configuration is in place.
+	if app.Locked {
+		err = dokkuAppSetLocked(app.Name, true, client)
+	}
+
 	return err
 }
 
@@ -445,7 +492,7 @@ func dokkuAppBuildpackAdd(appName string, buildpacks []string, client *goph.Clie
 	for _, pack := range buildpacks {
 		pack = strings.TrimSpace(pack)
 		if len(pack) > 0 {
-			res := run(client, fmt.Sprintf("buildpacks:add %s %s", shellescape.Quote(appName), pack))
+			res := run(client, fmt.Sprintf("buildpacks:add %s %s", shellescape.Quote(appName), shellescape.Quote(pack)))
 
 			if res.err != nil {
 				return res.err
@@ -460,7 +507,7 @@ func dokkuAppPortsAdd(appName string, ports []string, client *goph.Client) error
 	for _, portRange := range ports {
 		portRange = strings.TrimSpace(portRange)
 		if len(portRange) > 0 {
-			res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), portRange))
+			res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), shellescape.Quote(portRange)))
 
 			if res.err != nil {
 				return res.err
@@ -498,7 +545,9 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 
 		keysToDelete := calculateMissingKeys(newConfigVar, oldConfigVars)
 
-		dokkuAppConfigVarsUnset(app, keysToDelete, client)
+		if err := dokkuAppConfigVarsUnset(app, keysToDelete, client); err != nil {
+			return err
+		}
 
 		// TODO shouldn't need to duplicate below we already have config set function
 		// This is basically an upsert, and will update values even if they haven't changed
@@ -563,7 +612,9 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 		}
 		app.Buildpacks = nil
 
-		dokkuAppBuildpackAdd(appName, newBuildpacks, client)
+		if err := dokkuAppBuildpackAdd(appName, newBuildpacks, client); err != nil {
+			return err
+		}
 	}
 
 	if d.HasChange("ports") {
@@ -578,7 +629,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 			if _, ok := newPortLookup[p]; !ok {
 				if len(p) > 0 {
 					// the old port isn't in the new one, lets remove it
-					res := run(client, fmt.Sprintf("%s %s %s", portRemoveCmd(), shellescape.Quote(appName), p))
+					res := run(client, fmt.Sprintf("%s %s %s", portRemoveCmd(), shellescape.Quote(appName), shellescape.Quote(p)))
 
 					if res.err != nil {
 						return res.err
@@ -591,7 +642,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 			if _, ok := oldPortLookup[p]; !ok {
 				if len(p) > 0 {
 					// new port missing, lets add it
-					res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), p))
+					res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), shellescape.Quote(p)))
 
 					if res.err != nil {
 						return res.err
@@ -603,12 +654,22 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 
 	if d.HasChange("nginx_bind_address_ipv4") {
 		_, newBindAddr := d.GetChange("nginx_bind_address_ipv4")
-		dokkuAppNginxOptSet(appName, "bind-address-ipv4", newBindAddr.(string), client)
+		if err := dokkuAppNginxOptSet(appName, "bind-address-ipv4", newBindAddr.(string), client); err != nil {
+			return err
+		}
 	}
 
 	if d.HasChange("nginx_bind_address_ipv6") {
 		_, newBindAddr := d.GetChange("nginx_bind_address_ipv6")
-		dokkuAppNginxOptSet(appName, "bind-address-ipv6", newBindAddr.(string), client)
+		if err := dokkuAppNginxOptSet(appName, "bind-address-ipv6", newBindAddr.(string), client); err != nil {
+			return err
+		}
+	}
+
+	if d.HasChange("locked") {
+		if err := dokkuAppSetLocked(appName, d.Get("locked").(bool), client); err != nil {
+			return err
+		}
 	}
 
 	return nil

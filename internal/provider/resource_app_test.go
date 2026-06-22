@@ -118,6 +118,56 @@ resource "dokku_app" "test" {
 	})
 }
 
+func TestAccDokkuAppLocked(t *testing.T) {
+	appName := fmt.Sprintf("test-locked-%s", acctest.RandString(10))
+
+	resource.Test(t, resource.TestCase{
+		Providers:    testAccProviders,
+		CheckDestroy: testAccDokkuAppDestroy,
+		Steps: []resource.TestStep{
+			{
+				// Created with a deploy lock in place
+				Config: fmt.Sprintf(`
+resource "dokku_app" "test" {
+	name   = "%s"
+	locked = true
+}
+`, appName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDokkuAppExists("dokku_app.test"),
+					testAccCheckDokkuAppLocked("dokku_app.test", true),
+				),
+			},
+			{
+				// Lock removed on update
+				Config: fmt.Sprintf(`
+resource "dokku_app" "test" {
+	name   = "%s"
+	locked = false
+}
+`, appName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDokkuAppExists("dokku_app.test"),
+					testAccCheckDokkuAppLocked("dokku_app.test", false),
+				),
+			},
+			{
+				// Lock re-applied on update
+				Config: fmt.Sprintf(`
+resource "dokku_app" "test" {
+	name   = "%s"
+	locked = true
+}
+`, appName),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckDokkuAppExists("dokku_app.test"),
+					testAccCheckDokkuAppLocked("dokku_app.test", true),
+				),
+			},
+		},
+	})
+}
+
 func TestCompleteApp(t *testing.T) {
 	appName := fmt.Sprintf("test-app-%s", acctest.RandString(10))
 
@@ -950,6 +1000,31 @@ func testAccCheckDokkuAppNginxIpv6Addr(n string, ip string) resource.TestCheckFu
 
 		if app.NginxBindAddressIpv6 != ip {
 			return fmt.Errorf("nginx_bind_address_ipv6 was %s, expected %s", app.NginxBindAddressIpv6, ip)
+		}
+
+		return nil
+	}
+}
+
+//
+func testAccCheckDokkuAppLocked(n string, expected bool) resource.TestCheckFunc {
+	return func(s *terraform.State) error {
+		rs, ok := s.RootModule().Resources[n]
+
+		if !ok {
+			return fmt.Errorf("Not found: %s", n)
+		}
+
+		sshClient := testAccProvider.Meta().(*goph.Client)
+
+		app, err := dokkuAppRetrieve(rs.Primary.ID, sshClient)
+
+		if err != nil {
+			return fmt.Errorf("Error retrieving app info")
+		}
+
+		if app.Locked != expected {
+			return fmt.Errorf("Expected locked to be %t, was %t", expected, app.Locked)
 		}
 
 		return nil

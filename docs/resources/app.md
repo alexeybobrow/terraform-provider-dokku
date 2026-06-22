@@ -24,7 +24,7 @@ Manages a Dokku application. This resource enables the configuration and deploym
 - `buildpacks` (List of String) List of buildpacks to be used when deploying the application. These can be URLs to custom buildpacks or shorthand names for official Heroku buildpacks.
 - `config_vars` (Map of String, Sensitive) Environment variables to set for the application. These are exposed to the application at runtime.
 - `domains` (Set of String) List of domains to be associated with the application.
-- `locked` (Boolean) (Not yet implemented) Whether the application is locked for deployment. When true, deploys to this application will be blocked.
+- `locked` (Boolean) Whether the application is locked for deployment. When true, a deploy lock is placed on the app (dokku apps:lock) and deploys are blocked until it is unlocked.
 - `nginx_bind_address_ipv4` (String) The IPv4 address that nginx will bind to for this application. Defaults to '0.0.0.0'.
 - `nginx_bind_address_ipv6` (String) The IPv6 address that nginx will bind to for this application. Defaults to '::'.
 - `ports` (Set of String) Set of port mappings for the application. Each mapping should be in the format 'scheme:hostPort:containerPort' (e.g., 'https:443:8080').

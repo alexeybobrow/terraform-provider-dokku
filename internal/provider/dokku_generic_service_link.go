@@ -30,15 +30,17 @@ func serviceLinkCreate(d *schema.ResourceData, serviceName string, client *goph.
 	log.Printf("[DEBUG] running `%s`", cmd)
 	res := run(client, cmd)
 
-	// TODO better error handling, e.g app already created
 	if res.err != nil {
+		// Don't set an ID for a link that was never created, otherwise
+		// Terraform would track a resource that doesn't exist.
 		log.Printf("[DEBUG] Could not create service link\n")
 		log.Printf("[DEBUG] %s\n", res.err)
+		return res.err
 	}
 
 	d.SetId(fmt.Sprintf("%s-%s", d.Get("service").(string), d.Get("app").(string)))
 
-	return res.err
+	return nil
 }
 
 // Reading a service link is currently limited by the info we can get from dokku. We can only
