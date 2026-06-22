@@ -1,6 +1,6 @@
 package provider
 
-import "github.com/blang/semver"
+import "github.com/blang/semver/v4"
 
 // This is for maintaining backwards compatibility in v0.4.x for dokku versions
 // < 0.32, will probably deprecate < 0.32 support from v0.5.0

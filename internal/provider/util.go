@@ -7,7 +7,7 @@ import (
 
 //
 func interfaceSliceToStrSlice(list []interface{}) []string {
-	slice := make([]string, len(list))
+	slice := make([]string, 0, len(list))
 
 	for _, d := range list {
 		slice = append(slice, d.(string))
@@ -68,7 +68,10 @@ func sliceToLookupMap(slice []string) map[string]struct{} {
 
 //
 func dockerImageAndVersion(str string) (string, string) {
-	parts := strings.Split(str, ":")
+	parts := strings.SplitN(str, ":", 2)
+	if len(parts) < 2 {
+		return parts[0], ""
+	}
 	return parts[0], parts[1]
 }
 
@@ -93,13 +96,13 @@ func parseKeyValues(lines []string) map[string]string {
 		kp = strings.TrimSpace(kp)
 		if len(kp) > 0 {
 			parts := strings.Split(kp, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			key := strings.TrimSpace(parts[0])
 
-			val := parts[1]
-			if len(parts[1]) > 1 {
-				val = strings.Join(parts[1:], ":")
-			}
-			val = strings.TrimSpace(val)
+			// Re-join in case the value itself contained colons
+			val := strings.TrimSpace(strings.Join(parts[1:], ":"))
 
 			keyValues[key] = val
 		}

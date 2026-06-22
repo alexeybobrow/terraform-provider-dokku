@@ -3,12 +3,22 @@ package provider
 import (
 	"context"
 	"fmt"
+	"regexp"
 
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/validation"
 	"github.com/melbahja/goph"
 )
+
+// appNameRegex restricts app names to characters Dokku accepts and, crucially,
+// excludes any shell metacharacters that could be used for command injection
+// over the SSH connection.
+var appNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]*$`)
+
+// domainRegex matches valid hostnames (optionally a wildcard subdomain) and
+// likewise excludes shell metacharacters.
+var domainRegex = regexp.MustCompile(`^(\*\.)?([a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)*[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$`)
 
 func resourceApp() *schema.Resource {
 	return &schema.Resource{
@@ -21,6 +31,10 @@ func resourceApp() *schema.Resource {
 			"name": &schema.Schema{
 				Type:     schema.TypeString,
 				Required: true,
+				ValidateFunc: validation.StringMatch(
+					appNameRegex,
+					"app name must start with a letter, digit or underscore and contain only letters, digits, dots, dashes and underscores",
+				),
 				Description: "The name of the Dokku application.",
 			},
 			// TODO: locked support
@@ -43,6 +57,10 @@ func resourceApp() *schema.Resource {
 				Type: schema.TypeSet,
 				Elem: &schema.Schema{
 					Type: schema.TypeString,
+					ValidateFunc: validation.StringMatch(
+						domainRegex,
+						"domain must be a valid hostname (optionally a '*.' wildcard) and contain no shell metacharacters",
+					),
 				},
 				Optional: true,
 				Computed: true,
@@ -110,6 +128,9 @@ func appCreate(ctx context.Context, d *schema.ResourceData, m interface{}) diag.
 	}
 
 	app, err = dokkuAppRetrieve(app.Name, sshClient)
+	if err != nil {
+		return diag.FromErr(err)
+	}
 	app.setOnResourceData(d)
 
 	return diags

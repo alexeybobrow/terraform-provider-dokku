@@ -7,7 +7,7 @@ import (
 	"net"
 	"regexp"
 
-	"github.com/blang/semver"
+	"github.com/blang/semver/v4"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/melbahja/goph"
@@ -190,7 +190,7 @@ func providerConfigure(ctx context.Context, d *schema.ResourceData) (interface{}
 			log.Printf("[DEBUG] fail_on_untested_version: %v", d.Get("fail_on_untested_version").(bool))
 
 			if d.Get("fail_on_untested_version").(bool) {
-				return client, diag.Errorf(testedErrMsg)
+				return client, diag.Errorf("%s", testedErrMsg)
 			}
 			warn := diag.Diagnostic{
 				Severity: diag.Warning,

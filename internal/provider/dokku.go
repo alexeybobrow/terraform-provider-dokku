@@ -11,6 +11,16 @@ import (
 	"al.essio.dev/pkg/shellescape"
 )
 
+// shellescapeJoin shell-quotes each item and joins them with spaces, so a slice
+// of values can be safely interpolated into a single SSH command.
+func shellescapeJoin(items []string) string {
+	escaped := make([]string, 0, len(items))
+	for _, item := range items {
+		escaped = append(escaped, shellescape.Quote(item))
+	}
+	return strings.Join(escaped, " ")
+}
+
 //
 type DokkuApp struct {
 	Id         string
@@ -131,7 +141,7 @@ func NewDokkuAppFromResourceData(d *schema.ResourceData) *DokkuApp {
 
 //
 func dokkuAppRetrieve(appName string, client *goph.Client) (*DokkuApp, error) {
-	res := run(client, fmt.Sprintf("apps:exists %s", appName))
+	res := run(client, fmt.Sprintf("apps:exists %s", shellescape.Quote(appName)))
 
 	app := &DokkuApp{Id: appName, Name: appName, Locked: false}
 
@@ -184,7 +194,7 @@ func dokkuAppRetrieve(appName string, client *goph.Client) (*DokkuApp, error) {
 
 // TODO error handling
 func readAppConfig(appName string, sshClient *goph.Client) map[string]string {
-	res := run(sshClient, fmt.Sprintf("config:show %s", appName))
+	res := run(sshClient, fmt.Sprintf("config:show %s", shellescape.Quote(appName)))
 
 	// if err {
 	// 	// TODO
@@ -202,13 +212,13 @@ func readAppConfig(appName string, sshClient *goph.Client) map[string]string {
 		kp = strings.TrimSpace(kp)
 		if len(kp) > 0 {
 			parts := strings.Split(kp, ":")
+			if len(parts) < 2 {
+				continue
+			}
 			configKey := strings.TrimSpace(parts[0])
 
-			configVal := parts[1]
-			if len(parts[1]) > 1 {
-				configVal = strings.Join(parts[1:], ":")
-			}
-			configVal = strings.TrimSpace(configVal)
+			// Re-join in case the value itself contained colons
+			configVal := strings.TrimSpace(strings.Join(parts[1:], ":"))
 
 			config[configKey] = configVal
 		}
@@ -219,7 +229,7 @@ func readAppConfig(appName string, sshClient *goph.Client) map[string]string {
 
 //
 func readAppDomains(appName string, client *goph.Client) ([]string, error) {
-	res := run(client, fmt.Sprintf("domains:report %s", appName))
+	res := run(client, fmt.Sprintf("domains:report %s", shellescape.Quote(appName)))
 
 	if res.err != nil {
 		return nil, res.err
@@ -229,6 +239,9 @@ func readAppDomains(appName string, client *goph.Client) ([]string, error) {
 
 	for _, line := range domainLines {
 		parts := strings.Split(line, ":")
+		if len(parts) < 2 {
+			continue
+		}
 
 		key := strings.TrimSpace(parts[0])
 
@@ -249,7 +262,7 @@ func readAppDomains(appName string, client *goph.Client) ([]string, error) {
 // TODO Some parsing logic here that is replicated elsewhere (e.g readAppDomains above)
 // which we can make reusable
 func readAppBuildpacks(appName string, client *goph.Client) ([]string, error) {
-	res := run(client, fmt.Sprintf("buildpacks:list %s", appName))
+	res := run(client, fmt.Sprintf("buildpacks:list %s", shellescape.Quote(appName)))
 
 	if res.err != nil {
 		return nil, res.err
@@ -269,7 +282,7 @@ func readAppBuildpacks(appName string, client *goph.Client) ([]string, error) {
 }
 
 func readAppPorts(appName string, client *goph.Client) ([]string, error) {
-	res := run(client, fmt.Sprintf("%s %s", portReadCmd(), appName))
+	res := run(client, fmt.Sprintf("%s %s", portReadCmd(), shellescape.Quote(appName)))
 
 	portsLines := strings.Split(res.stdout, "\n")
 
@@ -310,7 +323,7 @@ type DokkuAppNginxReport struct {
 
 //
 func readAppNginxReport(appName string, client *goph.Client) (DokkuAppNginxReport, error) {
-	res := run(client, fmt.Sprintf("nginx:report %s", appName))
+	res := run(client, fmt.Sprintf("nginx:report %s", shellescape.Quote(appName)))
 
 	report := DokkuAppNginxReport{}
 
@@ -344,7 +357,7 @@ func readAppNginxReport(appName string, client *goph.Client) (DokkuAppNginxRepor
 
 //
 func dokkuAppCreate(app *DokkuApp, client *goph.Client) error {
-	res := run(client, fmt.Sprintf("apps:create %s", app.Name))
+	res := run(client, fmt.Sprintf("apps:create %s", shellescape.Quote(app.Name)))
 
 	log.Printf("[DEBUG] apps:create %v\n", res.stdout)
 
@@ -399,7 +412,7 @@ func dokkuAppConfigVarsSet(app *DokkuApp, client *goph.Client) error {
 		secrets = append(secrets, v)
 	}
 
-	res := run(client, fmt.Sprintf("config:set %s %s", app.Name, configVarStr), secrets...)
+	res := run(client, fmt.Sprintf("config:set %s %s", shellescape.Quote(app.Name), configVarStr), secrets...)
 	return res.err
 }
 
@@ -409,7 +422,7 @@ func dokkuAppConfigVarsUnset(app *DokkuApp, varsToUnset []string, client *goph.C
 		return nil
 	}
 	log.Printf("[DEBUG] Unsetting keys %v\n", varsToUnset)
-	cmd := fmt.Sprintf("config:unset %s %s", app.Name, strings.Join(varsToUnset, " "))
+	cmd := fmt.Sprintf("config:unset %s %s", shellescape.Quote(app.Name), strings.Join(varsToUnset, " "))
 	log.Printf("[DEBUG] running %s", cmd)
 	res := run(client, cmd)
 
@@ -418,10 +431,10 @@ func dokkuAppConfigVarsUnset(app *DokkuApp, varsToUnset []string, client *goph.C
 
 //
 func dokkuAppDomainsAdd(app *DokkuApp, client *goph.Client) error {
-	domainStr := strings.Join(app.Domains, " ")
+	domainStr := shellescapeJoin(app.Domains)
 
 	if len(domainStr) > 0 {
-		res := run(client, fmt.Sprintf("domains:set %s %s", app.Name, domainStr))
+		res := run(client, fmt.Sprintf("domains:set %s %s", shellescape.Quote(app.Name), domainStr))
 		return res.err
 	}
 	return nil
@@ -432,7 +445,7 @@ func dokkuAppBuildpackAdd(appName string, buildpacks []string, client *goph.Clie
 	for _, pack := range buildpacks {
 		pack = strings.TrimSpace(pack)
 		if len(pack) > 0 {
-			res := run(client, fmt.Sprintf("buildpacks:add %s %s", appName, pack))
+			res := run(client, fmt.Sprintf("buildpacks:add %s %s", shellescape.Quote(appName), pack))
 
 			if res.err != nil {
 				return res.err
@@ -447,7 +460,7 @@ func dokkuAppPortsAdd(appName string, ports []string, client *goph.Client) error
 	for _, portRange := range ports {
 		portRange = strings.TrimSpace(portRange)
 		if len(portRange) > 0 {
-			res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), appName, portRange))
+			res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), portRange))
 
 			if res.err != nil {
 				return res.err
@@ -459,7 +472,7 @@ func dokkuAppPortsAdd(appName string, ports []string, client *goph.Client) error
 }
 
 func dokkuAppNginxOptSet(appName string, property string, value string, client *goph.Client) error {
-	res := run(client, fmt.Sprintf("nginx:set %s %s %s", appName, property, value))
+	res := run(client, fmt.Sprintf("nginx:set %s %s %s", shellescape.Quote(appName), property, value))
 	return res.err
 }
 
@@ -467,7 +480,7 @@ func dokkuAppNginxOptSet(appName string, property string, value string, client *
 func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) error {
 	if d.HasChange("name") {
 		old, _ := d.GetChange("name")
-		res := run(client, fmt.Sprintf("apps:rename %s %s", old.(string), d.Get("name")))
+		res := run(client, fmt.Sprintf("apps:rename %s %s", shellescape.Quote(old.(string)), shellescape.Quote(d.Get("name").(string))))
 		log.Printf("[DEBUG] apps:rename %s %s : %v\n", old.(string), d.Get("name"), res.stdout)
 		if res.err != nil {
 			return res.err
@@ -502,7 +515,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 		if len(upsertParts) > 0 {
 			log.Printf("[DEBUG] Setting keys %v\n", keysToUpsert)
 
-			res := run(client, fmt.Sprintf("config:set %s %s", appName, strings.Join(upsertParts, " ")), secrets...)
+			res := run(client, fmt.Sprintf("config:set %s %s", shellescape.Quote(appName), strings.Join(upsertParts, " ")), secrets...)
 
 			if res.err != nil {
 				return res.err
@@ -517,10 +530,10 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 		domainsToRemove := calculateMissingStrings(newDomains, oldDomains)
 
 		// Remove domains
-		oldDomainsStr := strings.Join(domainsToRemove, " ")
+		oldDomainsStr := shellescapeJoin(domainsToRemove)
 
 		if len(oldDomainsStr) > 0 {
-			res := run(client, fmt.Sprintf("domains:remove %s %s", appName, oldDomainsStr))
+			res := run(client, fmt.Sprintf("domains:remove %s %s", shellescape.Quote(appName), oldDomainsStr))
 
 			if res.err != nil {
 				return res.err
@@ -528,10 +541,10 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 		}
 
 		// Add domains
-		newDomainsStr := strings.Join(newDomains, " ")
+		newDomainsStr := shellescapeJoin(newDomains)
 
 		if len(newDomainsStr) > 0 {
-			res := run(client, fmt.Sprintf("domains:add %s %s", appName, newDomainsStr))
+			res := run(client, fmt.Sprintf("domains:add %s %s", shellescape.Quote(appName), newDomainsStr))
 
 			if res.err != nil {
 				return res.err
@@ -543,7 +556,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 		_, newBuildpacksI := d.GetChange("buildpacks")
 		newBuildpacks := interfaceSliceToStrSlice(newBuildpacksI.([]interface{}))
 
-		res := run(client, fmt.Sprintf("buildpacks:clear %s", appName))
+		res := run(client, fmt.Sprintf("buildpacks:clear %s", shellescape.Quote(appName)))
 
 		if res.err != nil {
 			return res.err
@@ -565,7 +578,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 			if _, ok := newPortLookup[p]; !ok {
 				if len(p) > 0 {
 					// the old port isn't in the new one, lets remove it
-					res := run(client, fmt.Sprintf("%s %s %s", portRemoveCmd(), appName, p))
+					res := run(client, fmt.Sprintf("%s %s %s", portRemoveCmd(), shellescape.Quote(appName), p))
 
 					if res.err != nil {
 						return res.err
@@ -578,7 +591,7 @@ func dokkuAppUpdate(app *DokkuApp, d *schema.ResourceData, client *goph.Client) 
 			if _, ok := oldPortLookup[p]; !ok {
 				if len(p) > 0 {
 					// new port missing, lets add it
-					res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), appName, p))
+					res := run(client, fmt.Sprintf("%s %s %s", portAddCmd(), shellescape.Quote(appName), p))
 
 					if res.err != nil {
 						return res.err

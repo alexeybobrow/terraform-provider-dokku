@@ -5,6 +5,7 @@ import (
 	"log"
 	"strings"
 
+	"al.essio.dev/pkg/shellescape"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/melbahja/goph"
 )
@@ -25,7 +26,7 @@ func serviceLinkCreate(d *schema.ResourceData, serviceName string, client *goph.
 
 	optionsCmd := " " + strings.Join(options, " ")
 
-	cmd := fmt.Sprintf("%s:link %s %s %s", serviceName, d.Get("service"), d.Get("app"), optionsCmd)
+	cmd := fmt.Sprintf("%s:link %s %s %s", serviceName, shellescape.Quote(d.Get("service").(string)), shellescape.Quote(d.Get("app").(string)), optionsCmd)
 	log.Printf("[DEBUG] running `%s`", cmd)
 	res := run(client, cmd)
 
@@ -47,7 +48,7 @@ func serviceLinkCreate(d *schema.ResourceData, serviceName string, client *goph.
 //
 // as such this function for now just assesses whether or not the link exists
 func serviceLinkRead(d *schema.ResourceData, serviceName string, client *goph.Client) error {
-	cmd := fmt.Sprintf("%s:linked %s %s", serviceName, d.Get("service"), d.Get("app"))
+	cmd := fmt.Sprintf("%s:linked %s %s", serviceName, shellescape.Quote(d.Get("service").(string)), shellescape.Quote(d.Get("app").(string)))
 	log.Println(fmt.Sprintf("[DEBUG] running `%s`", cmd))
 	res := run(client, cmd)
 
@@ -66,7 +67,7 @@ func serviceLinkRead(d *schema.ResourceData, serviceName string, client *goph.Cl
 
 //
 func serviceLinkDelete(d *schema.ResourceData, serviceName string, client *goph.Client) error {
-	res := run(client, fmt.Sprintf("%s:unlink %s %s", serviceName, d.Get("service"), d.Get("app")))
+	res := run(client, fmt.Sprintf("%s:unlink %s %s", serviceName, shellescape.Quote(d.Get("service").(string)), shellescape.Quote(d.Get("app").(string))))
 
 	if res.err == nil {
 		d.SetId("")
